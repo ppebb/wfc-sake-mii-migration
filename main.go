@@ -151,6 +151,17 @@ func sanitizeFile(file string) {
 }
 
 func connectDB() (*pgx.Conn, error) {
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Println("Ensure you have made a backup using pg_dump prior to running this!")
+	fmt.Println("Press enter to continue...")
+	reader.ReadString('\n')
+
+	fmt.Println("Connecting to DB...")
+
+	return connectInner()
+}
+
+func connectInner() (*pgx.Conn, error) {
 	configBytes, err := os.ReadFile("config.yml")
 	if err != nil {
 		return nil, err
@@ -161,13 +172,6 @@ func connectDB() (*pgx.Conn, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	reader := bufio.NewReader(os.Stdin)
-	fmt.Println("Ensure you have made a backup using pg_dump prior to running this!")
-	fmt.Println("Press enter to continue...")
-	reader.ReadString('\n')
-
-	fmt.Println("Connecting to DB...")
 
 	connStr := fmt.Sprintf("postgresql://%s:%s@%s:%d/%s",
 		config.Username,
@@ -187,6 +191,13 @@ func sanitizeDB() {
 		os.Exit(1)
 	}
 
+	// Connect twice so we can write using the second connection
+	wConn, err := connectInner()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Failed to connect to DB: %v\n", err)
+		os.Exit(1)
+	}
+
 	fmt.Println("Connected.")
 	defer conn.Close(context.Background())
 
@@ -201,23 +212,29 @@ func sanitizeDB() {
 
 	for rows.Next() {
 		var profileID uint32
-		var mii string
+		var mii *string
 
-		err := rows.Scan(&profileID, mii)
+		err := rows.Scan(&profileID, &mii)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to handle row: %v\n", err)
 			os.Exit(1)
 		}
 
-		sanitizedMii, err := b64Sanitize(profileID, mii)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to sanitize Mii: %v\n", err)
+		if mii == nil {
+			continue
 		}
 
-		_, err = conn.Exec(context.Background(), "UPDATE users SET mariokartwii_friend_info = $2 WHERE profile_id = $1", profileID, sanitizedMii)
+		sanitizedMii, err := b64Sanitize(*mii)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "Failed to write sanitized mii for profileID %d\n", profileID)
+			fmt.Fprintf(os.Stderr, "Failed to sanitize Mii for profileID %d: %v\n", profileID, err)
 		}
+
+		_, err = wConn.Exec(context.Background(), "UPDATE users SET mariokartwii_friend_info = $2 WHERE profile_id = $1", profileID, sanitizedMii)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to write sanitized mii for profileID %d: %v\n", profileID, err)
+		}
+
+		counter++
 
 		if counter%1000 == 0 {
 			fmt.Printf("Processed %d Miis...\n", counter)
@@ -247,17 +264,26 @@ func verifyDB() {
 		counter++
 
 		var profileID uint32
-		var mii string
+		var mii *string
 
-		err := rows.Scan(&profileID, mii)
+		err := rows.Scan(&profileID, &mii)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to handle row: %v\n", err)
 			os.Exit(1)
 		}
 
-		miiBytes, err := base64.StdEncoding.DecodeString(mii)
+		if mii == nil {
+			continue
+		}
+
+		miiBytes, err := base64.StdEncoding.DecodeString(*mii)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Failed to decode b64 Mii for profileID %d: %v\n", profileID, err)
+			continue
+		}
+
+		if len(miiBytes) < 74 {
+			fmt.Fprintf(os.Stderr, "Decoded Mii is invalid size %d for profileID %d\n", len(miiBytes), profileID)
 			continue
 		}
 
@@ -266,10 +292,12 @@ func verifyDB() {
 			fmt.Fprintf(os.Stderr, "Failed to decode Mii for profileID %d: %v\n", profileID, err)
 		}
 
-		if miiData.birthDay != 0 || miiData.birthMonth != 0 || (miiData.miiID>>3) != 0 || miiData.creatorName != "" {
+		if miiData.birthDay != 0 || miiData.birthMonth != 0 || (miiData.miiID<<3) != 0 || miiData.creatorName != "" {
 			fmt.Fprintf(os.Stderr, "ProfileID %d has an unsanitized Mii!\n", profileID)
 			printMii(miiData)
 		}
+
+		counter++
 
 		if counter%1000 == 0 {
 			fmt.Printf("Verified %d Miis...\n", counter)
@@ -278,11 +306,14 @@ func verifyDB() {
 }
 
 // Sanitize a b64 encoded Mii
-func b64Sanitize(profileID uint32, mii string) (string, error) {
+func b64Sanitize(mii string) (string, error) {
 	miiBytes, err := base64.StdEncoding.DecodeString(mii)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to decode Mii for profileID %d\n", profileID)
 		return "", err
+	}
+
+	if len(miiBytes) < 74 {
+		return "", fmt.Errorf("decoded Mii is invalid size %d", len(miiBytes))
 	}
 
 	miiBytes = bytesSanitize(miiBytes)
