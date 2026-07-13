@@ -81,6 +81,20 @@ func main() {
 		}
 
 		printMii(miiData)
+	case "help":
+		fmt.Print(
+			"ppeb's sake mii migration tool.\n",
+			"Usage: ./wfc-sake-mii-migration [COMMAND] [COMMAND ARGS] [GLOBAL ARGS]\n",
+			"Available Commands:\n",
+			"  help             Print this message\n",
+			"  sanitize         Sanitize an entire database\n",
+			"  verify           Verify an entire database is sanitized\n",
+			"  file [path]      Sanitize a single Mii file\n",
+			"  print [path]     Print the data contained in a Mii file\n",
+			"Global Arguments:\n",
+			"  --sysID          Clear the sysID field while performing any sanitize operation\n",
+		)
+		os.Exit(0)
 	default:
 		fmt.Fprintf(os.Stderr, "Unknown sub command: %s\n", subCommand)
 		os.Exit(1)
