@@ -32,6 +32,10 @@ type MiiData struct {
 	creatorName string
 }
 
+var (
+	shouldSanitizeSysID = false
+)
+
 func main() {
 	if len(os.Args) < 2 {
 		fmt.Fprintf(os.Stderr, "No args provided! Pass one of 'sanitize', 'verify', 'file', or 'print'.\n")
@@ -39,6 +43,14 @@ func main() {
 	}
 
 	subCommand := os.Args[1]
+
+	for i := 2; i < len(os.Args); i++ {
+		arg := os.Args[i]
+		switch arg {
+		case "--sysID":
+			shouldSanitizeSysID = true
+		}
+	}
 
 	switch subCommand {
 	case "sanitize":
@@ -326,12 +338,12 @@ func bytesSanitize(miiBytes []byte) []byte {
 	miiBytes[0x0] = miiBytes[0x0] & 0b11000000
 	miiBytes[0x1] = miiBytes[0x1] & 0b00011111
 
-	// We do not want to zero out the sysID, but others may. These are the
-	// relevant bytes.
-	// for i := range 4 {
-	// 	// Zero sysid
-	// 	miiBytes[0x1C+i] = 0
-	// }
+	if shouldSanitizeSysID {
+		for i := range 4 {
+			// Zero sysid
+			miiBytes[0x1C+i] = 0
+		}
+	}
 
 	// Zero creation timestamp
 	// Keep top 3 bits of the first byte (special, foreign, regular)
